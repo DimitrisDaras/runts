@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Runts — Auto-Battler Roguelike</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── TITLE SCREEN ── -->
+    <div id="screen-title" class="screen active">
+      <div class="title-logo">⚔️</div>
+      <h1 class="title-name">RUNTS</h1>
+      <p class="title-sub">Auto-Battler Roguelike</p>
+      <button id="btn-start" class="btn-primary btn-large">Start Adventure</button>
+    </div>
+
+    <!-- ── DRAFT SCREEN ── -->
+    <div id="screen-draft" class="screen">
+      <h2 class="draft-title">Pick Your Squad</h2>
+      <p class="draft-counter">Pick <span id="draft-pick-num">1</span> of 3</p>
+      <div id="draft-picked" class="draft-picked"></div>
+      <div id="draft-cards" class="draft-cards"></div>
+      <p class="draft-hint">Choose wisely — synergies start here</p>
+    </div>
+
+    <!-- ── BATTLE SCREEN ── -->
+    <div id="screen-battle" class="screen">
+      <header class="hud">
+        <span id="hud-wave">Wave 1</span>
+        <span id="hud-score">Score: 0</span>
+      </header>
+      <div id="hud-graveyard" class="graveyard-counter" hidden></div>
+      <div id="boss-warning" class="boss-warning" hidden>⚠️ BOSS WAVE — Prepare!</div>
+
+      <div id="synergy-bar" class="synergy-bar" hidden></div>
+
+      <section class="battlefield">
+        <div class="team-label enemy-label">Enemies</div>
+        <div id="enemy-grid" class="battle-grid"></div>
+        <div class="vs-divider">⚡</div>
+        <div id="ally-grid" class="battle-grid"></div>
+        <div class="team-label ally-label">Your Team</div>
+      </section>
+
+      <div id="combat-log" class="combat-log">
+        <div id="log-entries"></div>
+      </div>
+
+      <button id="btn-battle" class="btn-primary btn-large">⚔️ Battle!</button>
+    </div>
+
+    <!-- ── RECRUIT SCREEN ── -->
+    <div id="screen-recruit" class="screen">
+      <h2 class="recruit-title">Victory! 🎉</h2>
+      <p class="recruit-sub">Choose a new recruit:</p>
+      <div id="recruit-cards" class="recruit-cards"></div>
+      <button id="btn-skip" class="btn-secondary btn-skip">Skip →</button>
+    </div>
+
+    <!-- ── MANAGE SQUAD SCREEN ── -->
+    <div id="screen-manage" class="screen">
+      <h2 class="manage-title">Manage Squad</h2>
+      <p class="manage-sub">Remove one to make room</p>
+      <div id="manage-minions" class="manage-minions"></div>
+      <button id="btn-manage-cancel" class="btn-secondary">Cancel (Skip Recruit)</button>
+    </div>
+
+    <!-- ── GAME OVER SCREEN ── -->
+    <div id="screen-gameover" class="screen">
+      <div class="gameover-icon">💀</div>
+      <h2 class="gameover-title">Defeated!</h2>
+      <div class="gameover-stats">
+        <div class="stat-row"><span>Waves Cleared</span><span id="go-waves">0</span></div>
+        <div class="stat-row"><span>Final Score</span><span id="go-score">0</span></div>
+      </div>
+      <button id="btn-restart" class="btn-primary btn-large">Try Again</button>
+    </div>
+
+  </div>
+
+  <script src="src/minions.js"></script>
+  <script src="src/synergies.js"></script>
+  <script src="src/combat.js"></script>
+  <script src="src/ui.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
