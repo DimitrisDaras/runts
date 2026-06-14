@@ -111,6 +111,61 @@ const ALLY_POOL = [
   },
 ];
 
+/**
+ * Exclusive boss-drop pool. Only available after boss waves; never in normal recruit.
+ * Skills use unique IDs handled in combat.js.
+ */
+const BOSS_POOL = [
+  {
+    name: 'Inferno', emoji: '🔥', hp: 14, atk: 12, shield: 0,
+    rarity: 'legendary', trait: 'aoe', tribe: 'mage', type: 'range',
+    skill: {
+      tier1: { name: 'Wildfire',   id: 'inferno_aoe', desc: 'Always AOE, burns 3 dmg/turn for 2t' },
+      tier2: { name: 'Inferno',    id: 'inferno_aoe', desc: 'Always AOE, burns 4 dmg/turn for 3t' },
+    },
+  },
+  {
+    name: 'Void Walker', emoji: '🌑', hp: 20, atk: 14, shield: 5,
+    rarity: 'legendary', trait: 'none', tribe: 'rogue', type: 'melee',
+    skill: {
+      tier1: { name: 'Void Strike',  id: 'void_walk', desc: 'Hits bypass enemy shield, damage goes directly to HP' },
+      tier2: { name: 'Void Devour',  id: 'void_walk', desc: 'Bypasses shield + crits at 35%' },
+    },
+  },
+  {
+    name: 'Storm Caller', emoji: '⚡', hp: 10, atk: 11, shield: 0,
+    rarity: 'rare', trait: 'none', tribe: 'mage', type: 'range',
+    skill: {
+      tier1: { name: 'Storm Strike', id: 'storm_strike', desc: 'Attacks 2 random enemies per turn' },
+      tier2: { name: 'Tempest',      id: 'storm_strike', desc: 'Attacks 3 random enemies per turn' },
+    },
+  },
+  {
+    name: 'Blood Knight', emoji: '🩸', hp: 18, atk: 13, shield: 8,
+    rarity: 'rare', trait: 'none', tribe: 'warrior', type: 'melee',
+    skill: {
+      tier1: { name: 'Lifesteal',   id: 'lifesteal', desc: 'Heals self for 50% of damage dealt' },
+      tier2: { name: 'Bloodthirst', id: 'lifesteal', desc: 'Heals self for 75% of damage dealt' },
+    },
+  },
+  {
+    name: 'Ancient Druid', emoji: '🌿', hp: 16, atk: 6, shield: 8,
+    rarity: 'rare', trait: 'regen', tribe: 'support', type: 'range',
+    skill: {
+      tier1: { name: 'Grove Heal', id: 'druid_heal', desc: 'Heals all allies 5 HP + regens 3 shield per turn' },
+      tier2: { name: 'World Tree', id: 'druid_heal', desc: 'Heals all allies 8 HP + regens 5 shield per turn' },
+    },
+  },
+  {
+    name: 'Drake Rider', emoji: '🐲', hp: 22, atk: 15, shield: 10,
+    rarity: 'legendary', trait: 'none', tribe: 'beast', type: 'melee',
+    skill: {
+      tier1: { name: 'Dragon Breath', id: 'drake_aoe', desc: 'Melee hit + 30% chance to AOE all enemies' },
+      tier2: { name: 'Wyrmfire',      id: 'drake_aoe', desc: 'Melee hit + 50% chance to AOE all enemies' },
+    },
+  },
+];
+
 /** Enemies have no skill or rarity system; combat uses their trait for dispatch. */
 const ENEMY_POOL = [
   { name: 'Goblin',    emoji: '👺', hp: 10, atk: 5,  shield: 5,  trait: 'none',  tribe: 'rogue',   type: 'melee' },
@@ -135,9 +190,9 @@ function getBossTemplate(wave) {
   return {
     name:   `${base.name} Lord`,
     emoji:  base.emoji,
-    hp:     base.hp     * 3,
-    atk:    base.atk    * 2,
-    shield: (base.shield || 0) * 2,
+    hp:     base.hp * 2,
+    atk:    Math.round(base.atk * 1.6),
+    shield: Math.round((base.shield || 0) * 1.5),
     trait,
     tribe:  base.tribe,
     type:   'melee',
@@ -171,7 +226,9 @@ function pickRandom(arr, n) {
  * @returns {Object}
  */
 function spawnMinion(tpl, side, wave, id) {
-  const scale     = side === 'enemy' ? Math.pow(1.2, wave - 1) : 1;
+  // +12% per wave (down from +20%); waves 1-2 get -20% buffer for new players
+  let scale = side === 'enemy' ? Math.pow(1.12, wave - 1) : 1;
+  if (side === 'enemy' && wave <= 2) scale *= 0.8;
   const maxHp     = Math.round(tpl.hp * scale);
   const maxShield = Math.round((tpl.shield || 0) * scale);
   return {
@@ -194,5 +251,7 @@ function spawnMinion(tpl, side, wave, id) {
     atk:       Math.round(tpl.atk * scale),
     alive:     true,
     statuses:  {},
+    xp:        0,
+    level:     1,
   };
 }

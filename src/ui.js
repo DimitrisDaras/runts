@@ -17,18 +17,41 @@ function renderHud(wave, score) {
   document.getElementById('hud-score').textContent = `Score: ${score}`;
 }
 
-function renderGraveyardCounter(count, bonusTier) {
-  const el = document.getElementById('hud-graveyard');
-  if (!el) return;
-  if (count === 0) { el.hidden = true; return; }
-  const nextAt = (bonusTier + 1) * 3;
-  el.textContent = `💀 ${count} fallen — next +ATK at ${nextAt}`;
-  el.hidden = false;
+/**
+ * Update the token HUD. Shows a small counter when tokens < 3,
+ * or the full action panel (revive / buff) when tokens >= 3.
+ * @param {number} tokens
+ */
+function renderTokenUI(tokens) {
+  const counterEl = document.getElementById('hud-graveyard');
+  const actionsEl = document.getElementById('token-actions');
+  const countEl   = document.getElementById('token-count');
+
+  if (tokens === 0) {
+    if (counterEl) counterEl.hidden = true;
+    if (actionsEl) actionsEl.hidden = true;
+    return;
+  }
+
+  if (tokens >= 3) {
+    if (counterEl) counterEl.hidden = true;
+    if (actionsEl) actionsEl.hidden = false;
+    if (countEl)   countEl.textContent = `💀 ${tokens} token${tokens !== 1 ? 's' : ''} — revive a unit or gain +5% ATK:`;
+  } else {
+    if (counterEl) { counterEl.textContent = `💀 ${tokens} token${tokens !== 1 ? 's' : ''}`; counterEl.hidden = false; }
+    if (actionsEl) actionsEl.hidden = true;
+  }
 }
 
 function renderBossWarning(isBoss) {
   const el = document.getElementById('boss-warning');
   if (el) el.hidden = !isBoss;
+}
+
+/** @param {number} gold */
+function renderGold(gold) {
+  const el = document.getElementById('hud-gold');
+  if (el) el.textContent = `🪙 ${gold}`;
 }
 
 // ── Minion cards ─────────────────────────────────────────────────────────────
@@ -61,10 +84,20 @@ function buildMinionCard(minion) {
   const bossBadge = minion.isBoss
     ? `<span class="minion-trait" style="color:#ef4444">BOSS</span>` : '';
 
+  const level  = minion.level ?? 1;
+  const xp     = minion.xp    ?? 0;
+  const xpDots = [0, 1, 2].map(i =>
+    `<span class="xp-dot${i < xp ? ' filled' : ''}"></span>`
+  ).join('');
+
   card.innerHTML = `
     <span class="minion-emoji">${minion.emoji}</span>
     <span class="minion-name">${minion.name}</span>
-    <span class="minion-tribe">${typeIcon} ${tribeMeta.icon} ${tribeMeta.label}</span>
+    <div class="card-lv-row">
+      <span class="minion-tribe">${typeIcon} ${tribeMeta.icon} ${tribeMeta.label}</span>
+      <span class="lv-badge">Lv.${level}</span>
+    </div>
+    <div class="xp-bar-wrap">${xpDots}</div>
     ${rarityBadge}${bossBadge}${skillBadge}
     <div class="shield-bar-wrap"><div class="shield-bar" style="width:${shPct}%"></div></div>
     <div class="hp-bar-wrap"><div class="hp-bar${hpPct < 30 ? ' low' : ''}" style="width:${hpPct}%"></div></div>
@@ -221,6 +254,14 @@ function renderCombatEvent(ev) {
       break;
     case 'shield_break':
       logLine(`💔 Shield broken! ${ev.minion.emoji} ${ev.minion.name} is exposed!`, 'log-death');
+      refreshMinionCard(ev.minion);
+      break;
+    case 'shield_regen':
+      logLine(`🛡 ${ev.minion.emoji} ${ev.minion.name} regens ${ev.amount} shield (Druid)`, 'log-block');
+      refreshMinionCard(ev.minion);
+      break;
+    case 'lifesteal_heal':
+      logLine(`🩸 ${ev.minion.emoji} ${ev.minion.name} drains ${ev.amount} HP`, 'log-heal');
       refreshMinionCard(ev.minion);
       break;
     case 'slow':
@@ -387,6 +428,221 @@ function renderManageSquadScreen(filteredCurrent, newRecruit, message, onRemove,
   if (cancelBtn) {
     cancelBtn.onclick = null;
     cancelBtn.addEventListener('click', onCancel);
+  }
+}
+
+// ── Boss Recruit screen ───────────────────────────────────────────────────────
+
+/**
+ * @param {Object}   bossDrop       the guaranteed boss-pool unit
+ * @param {Object[]} normalOptions  3 normal-tier recruits to choose from
+ * @param {Object[]} allies         current alive allies (for synergy hints)
+ * @param {Function} onNormalPick   callback(index into normalOptions)
+ * @param {Function} onSkip
+ */
+function renderBossRecruitScreen(bossDrop, normalOptions, allies, onNormalPick, onSkip) {
+  // Boss drop preview (non-clickable — player gets it automatically)
+  const dropContainer = document.getElementById('boss-drop-card');
+  dropContainer.innerHTML = '';
+  const bd         = bossDrop;
+  const bdTribe    = TRIBE_META[bd.tribe] || { icon: '?', label: bd.tribe };
+  const bdTypeIcon = bd.type === 'range' ? '🏹' : '⚔️';
+  const bdRarity   = bd.rarity ? ` rarity-${bd.rarity}` : '';
+  const dropCard   = document.createElement('div');
+  dropCard.className = `recruit-card${bdRarity} boss-drop-unit`;
+  dropCard.innerHTML = `
+    <span class="r-emoji">${bd.emoji}</span>
+    <span class="r-name">${bd.name}</span>
+    <span class="r-tribe">${bdTypeIcon} ${bdTribe.icon} ${bdTribe.label}</span>
+    ${bd.rarity ? `<span class="rarity-badge-${bd.rarity} r-rarity">${bd.rarity}</span>` : ''}
+    <span class="r-stats">⚔️${bd.atk} 🛡${bd.maxShield} ❤️${bd.maxHp}</span>
+    ${bd.skill ? `<span class="draft-skill-name">${bd.skill.tier1.name}</span><span class="draft-skill-desc">${bd.skill.tier1.desc}</span>` : ''}
+  `;
+  dropContainer.appendChild(dropCard);
+
+  // Normal options
+  const normalContainer = document.getElementById('boss-normal-cards');
+  normalContainer.innerHTML = '';
+  normalOptions.forEach((m, i) => {
+    const synHint   = recruitSynergyHint(allies, m);
+    const isDupe    = allies.some(a => a.name === m.name);
+    const tribeMeta = TRIBE_META[m.tribe] || { icon: '?', label: m.tribe };
+    const typeIcon  = m.type === 'range' ? '🏹' : '⚔️';
+    const rarityClass = m.rarity ? ` rarity-${m.rarity}` : '';
+    const card = document.createElement('div');
+    card.className = `recruit-card${rarityClass}${synHint || isDupe ? ' synergy-new' : ''}`;
+    card.innerHTML = `
+      <span class="r-emoji">${m.emoji}</span>
+      <span class="r-name">${m.name}</span>
+      <span class="r-tribe">${typeIcon} ${tribeMeta.icon} ${tribeMeta.label}</span>
+      ${m.rarity ? `<span class="rarity-badge-${m.rarity} r-rarity">${m.rarity}</span>` : ''}
+      <span class="r-stats">⚔️${m.atk} 🛡${m.maxShield} ❤️${m.maxHp}</span>
+      ${isDupe  ? `<span class="syn-hint">⬆ Evolves to Tier 2!</span>` : ''}
+      ${synHint ? `<span class="syn-hint">${synHint}</span>` : ''}
+    `;
+    card.addEventListener('click', () => onNormalPick(i));
+    normalContainer.appendChild(card);
+  });
+
+  const skipBtn = document.getElementById('btn-boss-skip');
+  if (skipBtn) {
+    skipBtn.onclick = null;
+    skipBtn.addEventListener('click', onSkip);
+  }
+}
+
+// ── Revive screens ────────────────────────────────────────────────────────────
+
+/**
+ * @param {Object[]} revivable  filtered graveyard entries
+ * @param {Function} onPick     callback(index)
+ * @param {Function} onCancel
+ */
+function renderReviveScreen(revivable, onPick, onCancel) {
+  const container = document.getElementById('revive-list');
+  container.innerHTML = '';
+
+  if (!revivable.length) {
+    const empty = document.createElement('p');
+    empty.className = 'revive-empty';
+    empty.textContent = 'No units available to revive';
+    container.appendChild(empty);
+  } else {
+    revivable.forEach((entry, i) => {
+      const card = document.createElement('div');
+      card.className = 'manage-card';
+      card.innerHTML = `
+        <span class="manage-emoji">${entry.emoji}</span>
+        <div class="manage-info">
+          <span class="manage-name">${entry.name}</span>
+          <span class="manage-role">Fell in Wave ${entry.wave}</span>
+          <span class="manage-stats">Returns at 40% HP, 0 shield</span>
+        </div>
+        <button class="btn-revive-pick">⚡ Pick</button>
+      `;
+      card.querySelector('.btn-revive-pick').addEventListener('click', () => onPick(i));
+      container.appendChild(card);
+    });
+  }
+
+  const cancelBtn = document.getElementById('btn-revive-cancel');
+  if (cancelBtn) {
+    cancelBtn.onclick = null;
+    cancelBtn.addEventListener('click', onCancel);
+  }
+}
+
+/**
+ * @param {Object}   entry      graveyard record
+ * @param {Function} onConfirm
+ * @param {Function} onCancel
+ */
+function renderReviveConfirm(entry, onConfirm, onCancel) {
+  const info = document.getElementById('revive-confirm-info');
+  info.innerHTML = `
+    <div class="revive-confirm-unit">
+      <span style="font-size:40px">${entry.emoji}</span>
+      <div>
+        <strong style="font-size:16px">${entry.name}</strong><br>
+        <span style="font-size:11px;color:#94a3b8">Fell in Wave ${entry.wave}</span>
+      </div>
+    </div>
+  `;
+  document.getElementById('btn-revive-yes').onclick = onConfirm;
+  document.getElementById('btn-revive-no').onclick  = onCancel;
+}
+
+// ── Shop screen ───────────────────────────────────────────────────────────────
+
+/**
+ * Render the shop screen with 3 offers and an inline unit picker.
+ * @param {Object[]} offers     from generateShopOffers()
+ * @param {Object[]} allies     alive allies (for picker)
+ * @param {number}   gold       current player gold
+ * @param {number}   wave       completed wave number (for subtitle)
+ * @param {Function} onBuy      callback(offer, targetUnit|null)
+ * @param {Function} onSkip
+ */
+function renderShopScreen(offers, allies, gold, wave, onBuy, onSkip) {
+  const goldEl = document.getElementById('shop-gold-display');
+  const subEl  = document.getElementById('shop-sub');
+  if (goldEl) goldEl.textContent = `🪙 ${gold}`;
+  if (subEl)  subEl.textContent  = `Wave ${wave} complete — spend wisely`;
+
+  const offersEl = document.getElementById('shop-offers');
+  const pickerEl = document.getElementById('shop-picker');
+  offersEl.innerHTML = '';
+  offersEl.hidden    = false;
+  pickerEl.hidden    = true;
+
+  function showPicker(offer) {
+    offersEl.hidden = true;
+    pickerEl.hidden = false;
+    document.getElementById('shop-picker-label').textContent = `${offer.label} — pick a unit:`;
+
+    const unitsEl  = document.getElementById('shop-picker-units');
+    unitsEl.innerHTML = '';
+
+    const targetable = offer.id === 'unlock_tier2'
+      ? allies.filter(a => a.alive && a.skill?.tier2 && a.skillTier < 2)
+      : allies.filter(a => a.alive);
+
+    if (!targetable.length) {
+      const p = document.createElement('p');
+      p.textContent = 'No eligible units.';
+      p.style.cssText = 'color:var(--text-dim);font-size:13px;padding:16px 0;text-align:center';
+      unitsEl.appendChild(p);
+    } else {
+      targetable.forEach(ally => {
+        const card = document.createElement('div');
+        card.className = 'manage-card';
+        card.innerHTML = `
+          <span class="manage-emoji">${ally.emoji}</span>
+          <div class="manage-info">
+            <span class="manage-name">${ally.name} <span class="lv-badge">Lv.${ally.level ?? 1}</span></span>
+            <span class="manage-stats">⚔️${ally.atk} 🛡${ally.shield}/${ally.maxShield} ❤️${ally.hp}/${ally.maxHp}</span>
+          </div>
+          <button class="btn-shop-pick">Pick</button>
+        `;
+        card.querySelector('.btn-shop-pick').addEventListener('click', () => onBuy(offer, ally));
+        unitsEl.appendChild(card);
+      });
+    }
+
+    document.getElementById('btn-shop-back').onclick = () => {
+      offersEl.hidden = false;
+      pickerEl.hidden = true;
+    };
+  }
+
+  offers.forEach((offer, i) => {
+    const canAfford = gold >= offer.cost;
+    const card = document.createElement('div');
+    card.className = `shop-card${canAfford ? '' : ' shop-card-disabled'}`;
+    card.style.animationDelay = `${i * 0.07}s`;
+    card.innerHTML = `
+      <span class="shop-offer-label">${offer.label}</span>
+      <span class="shop-offer-desc">${offer.desc}</span>
+      <span class="shop-offer-cost${canAfford ? '' : ' shop-cant-afford'}">
+        🪙 ${offer.cost}${canAfford ? '' : ' — Not enough gold'}
+      </span>
+    `;
+    if (canAfford) {
+      card.addEventListener('click', () => {
+        if (offer.needsTarget) {
+          showPicker(offer);
+        } else {
+          onBuy(offer, null);
+        }
+      });
+    }
+    offersEl.appendChild(card);
+  });
+
+  const skipBtn = document.getElementById('btn-shop-skip');
+  if (skipBtn) {
+    skipBtn.onclick = null;
+    skipBtn.addEventListener('click', onSkip);
   }
 }
 

@@ -3,16 +3,18 @@
  */
 
 const state = {
-  wave:              1,
-  score:             0,
-  totalTurns:        0,
-  allies:            [],
-  nextId:            0,
-  graveyard:         [],
-  graveyardCount:    0,       // combat deaths only (not retirements)
-  graveyardAtkMult:  1.0,     // cumulative permanent ATK multiplier
-  graveyardBonusTier: 0,      // how many 3-death bonus tiers have triggered
-  currentEnemies:    [],      // pre-generated enemies shown as wave preview
+  wave:             1,
+  score:            0,
+  totalTurns:       0,
+  allies:           [],
+  nextId:           0,
+  graveyard:        [],
+  deathTokens:      0,      // spendable tokens; each combat death +1
+  atkBuffTier:      0,      // how many +5% ATK buffs have been applied
+  graveyardAtkMult: 1.0,    // 1.05^atkBuffTier; applied to new recruits
+  currentEnemies:   [],     // pre-generated enemies shown as wave preview
+  gold:             20,     // starting gold
+  goldHistory:      [],     // [{ wave, earned }]
 };
 
 /** @param {number} ms @returns {Promise<void>} */
@@ -22,12 +24,6 @@ function nextId() { return state.nextId++; }
 
 // ── Recruit pool (wave-gated by rarity) ───────────────────────────────────────
 
-/**
- * Return the subset of ALLY_POOL available at the given wave.
- * Draft always uses common only (wave 1).
- * @param {number} wave
- * @returns {Object[]}
- */
 function getRecruitPool(wave) {
   if (wave <= 3)  return ALLY_POOL.filter(m => m.rarity === 'common');
   if (wave <= 6)  return ALLY_POOL.filter(m => ['common', 'uncommon'].includes(m.rarity));
@@ -35,67 +31,138 @@ function getRecruitPool(wave) {
   return ALLY_POOL;
 }
 
-// ── Graveyard bonus ───────────────────────────────────────────────────────────
+// ── XP system ────────────────────────────────────────────────────────────────
 
 /**
- * Record a minion death/retirement in the graveyard.
- * Combat deaths (retired=false) count toward the +5% ATK bonus.
- * Returns true if a new bonus tier was triggered.
- * @param {Object} m
- * @param {number} wave
- * @param {boolean} retired  true = player-removed, not killed
+ * Grant 1 XP to a surviving unit. Returns true if the unit leveled up.
+ * Level-up: +15% to maxHp, ATK, and maxShield; also gains the stat increase.
+ * @param {Object} unit
  * @returns {boolean}
  */
+function grantXP(unit) {
+  unit.xp++;
+  if (unit.xp < 3) return false;
+
+  unit.xp = 0;
+  unit.level++;
+
+  const newMaxHp = Math.round(unit.maxHp * 1.15);
+  unit.hp        = Math.min(unit.hp + (newMaxHp - unit.maxHp), newMaxHp);
+  unit.maxHp     = newMaxHp;
+
+  unit.atk = Math.round(unit.atk * 1.15);
+
+  if (unit.maxShield > 0) {
+    const newMaxShield = Math.round(unit.maxShield * 1.15);
+    unit.shield        = Math.min(unit.shield + (newMaxShield - unit.maxShield), newMaxShield);
+    unit.maxShield     = newMaxShield;
+  }
+
+  return true;
+}
+
+// ── Gold system ───────────────────────────────────────────────────────────────
+
+/**
+ * Award gold at the end of a wave. Boss waves give double.
+ * Formula: base 5 + wave×2; boss waves ×2.
+ * @param {number} wave
+ * @returns {number} amount earned
+ */
+function earnGold(wave) {
+  const base   = 5 + wave * 2;
+  const earned = (wave % 5 === 0) ? base * 2 : base;
+  state.gold  += earned;
+  state.goldHistory.push({ wave, earned });
+  return earned;
+}
+
+// ── Death token system ────────────────────────────────────────────────────────
+
 function addToGraveyard(m, wave, retired = false) {
   state.graveyard.push({ id: m.id, name: m.name, emoji: m.emoji, wave, retired });
-  if (retired) return false;
+  if (!retired) state.deathTokens++;
+}
 
-  state.graveyardCount++;
-  const newTier = Math.floor(state.graveyardCount / 3);
-  if (newTier > state.graveyardBonusTier) {
-    state.graveyardBonusTier = newTier;
-    state.graveyardAtkMult   = Math.pow(1.05, newTier);
-    // Apply +5% ATK to every current alive ally (restoreSynergies already ran)
-    for (const ally of state.allies) {
-      ally.atk = Math.round(ally.atk * 1.05);
-    }
-    return true;
+function applyAtkBuff() {
+  if (state.deathTokens < 3) return;
+  state.deathTokens -= 3;
+  state.atkBuffTier++;
+  state.graveyardAtkMult = Math.pow(1.05, state.atkBuffTier);
+  for (const ally of state.allies) ally.atk = Math.round(ally.atk * 1.05);
+  renderTokenUI(state.deathTokens);
+  renderBattlefield(state.allies, state.currentEnemies);
+  logLine(`💪 +5% ATK buff activated! (${state.atkBuffTier * 5}% total bonus)`, 'log-wave');
+}
+
+function reviveUnit(entry) {
+  if (state.deathTokens < 3) return;
+  state.deathTokens -= 3;
+  entry.revived = true;
+
+  const tpl = [...ALLY_POOL, ...BOSS_POOL].find(m => m.name === entry.name);
+  if (!tpl) return;
+
+  const m  = spawnMinion(tpl, 'ally', 1, nextId());
+  m.hp     = Math.round(m.maxHp * 0.4);
+  m.shield = 0;
+  if (state.graveyardAtkMult > 1.0) m.atk = Math.round(m.atk * state.graveyardAtkMult);
+  state.allies.push(m);
+  updateSkillTiers(state.allies);
+
+  renderTokenUI(state.deathTokens);
+  renderBattlefield(state.allies, state.currentEnemies);
+  logLine(`⚡ ${m.emoji} ${m.name} has been revived at 40% HP!`, 'log-heal');
+}
+
+function openReviveScreen() {
+  const revivable = state.graveyard.filter(e => !e.retired && !e.revived);
+
+  function onPick(idx) {
+    const entry = revivable[idx];
+    renderReviveConfirm(
+      entry,
+      () => { reviveUnit(entry); showScreen('battle'); },
+      () => showScreen('revive')
+    );
+    showScreen('revive-confirm');
   }
-  return false;
+
+  renderReviveScreen(revivable, onPick, () => showScreen('battle'));
+  showScreen('revive');
 }
 
 // ── Rest heal ─────────────────────────────────────────────────────────────────
 
-/** Heal all alive allies 20% of their base maxHp (called after each recruit phase). */
 function applyRestHeal() {
   for (const ally of state.allies) {
     if (!ally.alive) continue;
-    const healAmt = Math.round(ally.maxHp * 0.2);
-    ally.hp = Math.min(ally.maxHp, ally.hp + healAmt);
+    ally.hp = Math.min(ally.maxHp, ally.hp + Math.round(ally.maxHp * 0.2));
   }
 }
 
 // ── Draft ────────────────────────────────────────────────────────────────────
 
 function initGame() {
-  state.wave              = 1;
-  state.score             = 0;
-  state.totalTurns        = 0;
-  state.nextId            = 0;
-  state.allies            = [];
-  state.graveyard         = [];
-  state.graveyardCount    = 0;
-  state.graveyardAtkMult  = 1.0;
-  state.graveyardBonusTier = 0;
-  state.currentEnemies    = [];
+  state.wave             = 1;
+  state.score            = 0;
+  state.totalTurns       = 0;
+  state.nextId           = 0;
+  state.allies           = [];
+  state.graveyard        = [];
+  state.deathTokens      = 0;
+  state.atkBuffTier      = 0;
+  state.graveyardAtkMult = 1.0;
+  state.currentEnemies   = [];
+  state.gold             = 20;
+  state.goldHistory      = [];
   startDraft();
 }
 
 const draft = { pool: [], pickedEmojis: [] };
 
 function startDraft() {
-  // Draft always uses common-only pool
-  const commonPool = ALLY_POOL.filter(m => m.rarity === 'common');
+  const commonPool   = ALLY_POOL.filter(m => m.rarity === 'common');
   draft.pool         = pickRandom(commonPool, 5).map(tpl => spawnMinion(tpl, 'ally', 1, nextId()));
   draft.pickedEmojis = [];
   renderDraftScreen(draft.pool, 0, [], onDraftPick);
@@ -110,10 +177,10 @@ function onDraftPick(idx) {
   updateSkillTiers(state.allies);
 
   if (state.allies.length >= 3) {
-    // Draft complete — pre-generate wave 1 enemies and show battle screen
     state.currentEnemies = buildEnemyWave();
     const syn = calcSynergies(state.allies);
     renderHud(state.wave, state.score);
+    renderGold(state.gold);
     renderBattlefield(state.allies, state.currentEnemies);
     renderSynergyBar(syn);
     renderBossWarning(state.wave % 5 === 0);
@@ -130,13 +197,6 @@ function onDraftPick(idx) {
 
 // ── Wave setup ────────────────────────────────────────────────────────────────
 
-/**
- * Build the enemy wave scaled to the current wave number.
- * Wave 1-3: melee enemies only.
- * Wave 4+: all enemies.
- * Boss every 5 waves.
- * @returns {Object[]}
- */
 function buildEnemyWave() {
   if (state.wave % 5 === 0) {
     const bossTpl = getBossTemplate(state.wave);
@@ -158,10 +218,6 @@ function buildEnemyWave() {
 
 // ── Advance to next wave ──────────────────────────────────────────────────────
 
-/**
- * Apply rest heal, increment wave, pre-generate enemies, show battle screen.
- * Called after every recruit phase (pick, skip, or manage squad cancel).
- */
 function advanceToNextWave() {
   applyRestHeal();
   state.wave++;
@@ -169,10 +225,11 @@ function advanceToNextWave() {
 
   const syn = calcSynergies(state.allies);
   renderHud(state.wave, state.score);
+  renderGold(state.gold);
   renderBattlefield(state.allies, state.currentEnemies);
   renderSynergyBar(syn);
   renderBossWarning(state.wave % 5 === 0);
-  renderGraveyardCounter(state.graveyardCount, state.graveyardBonusTier);
+  renderTokenUI(state.deathTokens);
   clearLog();
 
   if (state.wave % 5 === 0) logLine('⚠️ BOSS WAVE — Prepare yourself!', 'log-death');
@@ -184,26 +241,39 @@ function advanceToNextWave() {
   showScreen('battle');
 }
 
+/**
+ * Called after every recruit phase (normal or boss).
+ * Shows the shop if this was a shop wave (wave % 3 === 0), otherwise advances.
+ */
+function finishRecruitPhase() {
+  if (state.wave % 3 === 0) {
+    startShop();
+  } else {
+    advanceToNextWave();
+  }
+}
+
 // ── Battle ────────────────────────────────────────────────────────────────────
 
 async function runBattle() {
   document.getElementById('btn-battle').disabled = true;
+
+  const tokenEl = document.getElementById('token-actions');
+  if (tokenEl) tokenEl.style.pointerEvents = 'none';
+
   clearLog();
 
-  // Reset only status effects — HP/shield carry over (injury system)
-  for (const ally of state.allies) {
-    ally.statuses = {};
-  }
+  for (const ally of state.allies) ally.statuses = {};
 
   const syn = calcSynergies(state.allies);
-  applyTempSynergies(state.allies, syn);   // boost stats but do NOT heal to full
+  applyTempSynergies(state.allies, syn);
 
   const enemies = state.currentEnemies;
   for (const e of enemies) { e.alive = true; e.statuses = {}; }
 
   renderBattlefield(state.allies, enemies);
   renderSynergyBar(syn);
-  renderBossWarning(false);  // hide warning once battle starts
+  renderBossWarning(false);
 
   logLine(`⚡ Wave ${state.wave} begins!${enemies[0]?.isBoss ? ' 👹 BOSS!' : ` ${enemies.length} enemies approach.`}`, 'log-wave');
   if (syn.active.length)
@@ -229,34 +299,52 @@ async function runBattle() {
     if (result === 'ally') {
       restoreSynergies(state.allies);
 
-      // Remove dead allies permanently
       const fallen = state.allies.filter(m => !m.alive);
       state.allies  = state.allies.filter(m => m.alive);
 
-      let bonusTriggered = 0;
-      for (const m of fallen) {
-        if (addToGraveyard(m, state.wave)) bonusTriggered++;
-      }
+      // Grant XP to survivors (after synergy restore, on base stats)
+      const xpResults = state.allies.map(ally => ({ ally, leveled: grantXP(ally) }));
+
+      for (const m of fallen) addToGraveyard(m, state.wave);
+
+      const earned = earnGold(state.wave);
+
+      if (tokenEl) tokenEl.style.pointerEvents = '';
 
       await sleep(300);
       logLine('🏆 Victory!', 'log-wave');
+      logLine(`🪙 +${earned} gold earned! (Total: ${state.gold})`, 'log-wave');
+      renderGold(state.gold);
+      renderBattlefield(state.allies, []); // refresh cards to show updated XP/level
 
-      if (bonusTriggered > 0) {
-        logLine(`💀 Graveyard power rises! +5% ATK (${state.graveyardBonusTier * 5}% total bonus)`, 'log-wave');
-        renderGraveyardCounter(state.graveyardCount, state.graveyardBonusTier);
-        // Refresh battlefield cards to show updated ATK values
-        renderBattlefield(state.allies, []);
+      for (const { ally, leveled } of xpResults) {
+        if (leveled) {
+          logLine(`🌟 ${ally.emoji} ${ally.name} leveled up! Now Lv.${ally.level}`, 'log-wave');
+        } else {
+          logLine(`⬆️ ${ally.emoji} ${ally.name} gained XP! (${ally.xp}/3)`, 'log-heal');
+        }
+      }
+
+      if (fallen.length > 0) {
+        logLine(`💀 ${state.deathTokens} token${state.deathTokens !== 1 ? 's' : ''} available${state.deathTokens >= 3 ? ' — revive or buff!' : ''}`, 'log-wave');
+        renderTokenUI(state.deathTokens);
       }
 
       state.score = state.wave * 10 + state.totalTurns;
       renderHud(state.wave, state.score);
       await sleep(600);
-      startRecruit();
+
+      if (state.wave % 5 === 0) {
+        startBossRecruit();
+      } else {
+        startRecruit();
+      }
       return;
     }
 
     if (result === 'enemy') {
       restoreSynergies(state.allies);
+      if (tokenEl) tokenEl.style.pointerEvents = '';
       await sleep(300);
       logLine('💀 Defeated...', 'log-wave');
       await sleep(800);
@@ -269,40 +357,33 @@ async function runBattle() {
   }
 }
 
-// ── Recruit ───────────────────────────────────────────────────────────────────
+// ── Normal recruit ────────────────────────────────────────────────────────────
 
 function startRecruit() {
-  // Work with alive allies only for composition checks
   const aliveAllies = state.allies.filter(m => m.alive);
+  const pool        = getRecruitPool(state.wave);
+  const ownedNames  = new Set(aliveAllies.map(m => m.name));
+  const avail       = pool.filter(tpl => !ownedNames.has(tpl.name));
+  const finalPool   = avail.length >= 3 ? avail : pool;
+  const options     = pickRandom(finalPool, 3).map(tpl => spawnMinion(tpl, 'ally', 1, nextId()));
 
-  const pool      = getRecruitPool(state.wave);
-  const ownedNames = new Set(aliveAllies.map(m => m.name));
-  const avail     = pool.filter(tpl => !ownedNames.has(tpl.name));
-  const finalPool = avail.length >= 3 ? avail : pool;
-  const options   = pickRandom(finalPool, 3).map(tpl => spawnMinion(tpl, 'ally', 1, nextId()));
-
-  function onSkip() {
-    advanceToNextWave();
-  }
+  function onSkip() { finishRecruitPhase(); }
 
   function onPick(idx) {
     const chosen   = options[idx];
     const sameType = aliveAllies.filter(m => m.type === chosen.type);
 
     if (sameType.length >= 3) {
-      // Type slot limit reached — show manage screen for same type only
       const typeName = chosen.type === 'range' ? 'range' : 'melee';
       renderManageSquadScreen(
-        sameType,
-        chosen,
-        `Too many ${typeName} units — remove one`,
+        sameType, chosen, `Too many ${typeName} units — remove one`,
         (removeIdx) => {
           const removed = sameType[removeIdx];
           state.allies  = state.allies.filter(m => m !== removed);
           addToGraveyard(removed, state.wave, true);
           finishRecruit(chosen);
         },
-        () => advanceToNextWave()
+        () => finishRecruitPhase()
       );
       showScreen('manage');
       return;
@@ -315,13 +396,7 @@ function startRecruit() {
   showScreen('recruit');
 }
 
-/**
- * Add the chosen recruit, apply graveyard ATK bonus, handle evolutions,
- * then advance to the next wave (which applies rest heal).
- * @param {Object} chosen  spawned minion instance
- */
 function finishRecruit(chosen) {
-  // Apply cumulative graveyard ATK bonus to the new recruit
   if (state.graveyardAtkMult > 1.0) {
     chosen.atk = Math.round(chosen.atk * state.graveyardAtkMult);
   }
@@ -329,21 +404,114 @@ function finishRecruit(chosen) {
   state.allies.push(chosen);
   const evolved = updateSkillTiers(state.allies);
 
-  // Log evolutions (battlefield will be re-rendered in advanceToNextWave)
-  for (const m of evolved) {
-    m.lastEvolution = true; // flag for post-render animation
-  }
+  finishRecruitPhase(); // may show shop or advance
 
-  // advanceToNextWave applies rest heal, increments wave, pre-generates enemies
-  advanceToNextWave();
-
-  // Announce recruit + evolutions in the now-active battle screen log
   logLine(`✅ ${chosen.emoji} ${chosen.name} joined your team!`, 'log-heal');
   for (const m of evolved) {
     logLine(`⬆ ${m.emoji} ${m.name} evolved to Tier 2 — ${m.skill.tier2.name} unlocked!`, 'log-wave');
     animateEvolution(m);
-    delete m.lastEvolution;
   }
+}
+
+// ── Boss recruit ──────────────────────────────────────────────────────────────
+
+function startBossRecruit() {
+  const aliveAllies   = state.allies.filter(m => m.alive);
+  const bossDrop      = pickRandom(BOSS_POOL, 1).map(tpl => spawnMinion(tpl, 'ally', 1, nextId()))[0];
+  const pool          = getRecruitPool(state.wave);
+  const ownedNames    = new Set(aliveAllies.map(m => m.name));
+  const avail         = pool.filter(tpl => !ownedNames.has(tpl.name));
+  const finalPool     = avail.length >= 3 ? avail : pool;
+  const normalOptions = pickRandom(finalPool, 3).map(tpl => spawnMinion(tpl, 'ally', 1, nextId()));
+
+  function onNormalPick(idx) { finishBossRecruit(bossDrop, normalOptions[idx]); }
+  function onSkip()          { finishBossRecruit(bossDrop, null); }
+
+  renderBossRecruitScreen(bossDrop, normalOptions, aliveAllies, onNormalPick, onSkip);
+  showScreen('boss-recruit');
+}
+
+let _bossQueue    = [];
+let _bossQueueIdx = 0;
+let _bossAdded    = [];
+
+function finishBossRecruit(bossDrop, normalPick) {
+  _bossQueue    = [bossDrop, normalPick].filter(Boolean);
+  _bossQueueIdx = 0;
+  _bossAdded    = [];
+  processNextBossUnit();
+}
+
+function processNextBossUnit() {
+  if (_bossQueueIdx >= _bossQueue.length) {
+    const added   = _bossAdded;
+    _bossQueue    = [];
+    _bossQueueIdx = 0;
+    _bossAdded    = [];
+    const evolved = updateSkillTiers(state.allies);
+    finishRecruitPhase(); // may show shop or advance
+    for (const m of added)   logLine(`✅ ${m.emoji} ${m.name} joined your team!`, 'log-heal');
+    for (const m of evolved) logLine(`⬆ ${m.emoji} ${m.name} evolved to Tier 2 — ${m.skill.tier2.name} unlocked!`, 'log-wave');
+    return;
+  }
+
+  const chosen      = _bossQueue[_bossQueueIdx++];
+  const aliveAllies = state.allies.filter(m => m.alive);
+  const sameType    = aliveAllies.filter(m => m.type === chosen.type);
+
+  if (sameType.length >= 3) {
+    const typeName = chosen.type === 'range' ? 'range' : 'melee';
+    renderManageSquadScreen(
+      sameType, chosen, `Too many ${typeName} units — remove one`,
+      (removeIdx) => {
+        const removed = sameType[removeIdx];
+        state.allies  = state.allies.filter(m => m !== removed);
+        addToGraveyard(removed, state.wave, true);
+        doAddRecruit(chosen);
+        processNextBossUnit();
+      },
+      () => processNextBossUnit()
+    );
+    showScreen('manage');
+    return;
+  }
+
+  doAddRecruit(chosen);
+  processNextBossUnit();
+}
+
+function doAddRecruit(chosen) {
+  if (state.graveyardAtkMult > 1.0) chosen.atk = Math.round(chosen.atk * state.graveyardAtkMult);
+  state.allies.push(chosen);
+  _bossAdded.push(chosen);
+}
+
+// ── Shop ─────────────────────────────────────────────────────────────────────
+
+function startShop() {
+  const offers = generateShopOffers();
+  renderShopScreen(
+    offers,
+    state.allies.filter(m => m.alive),
+    state.gold,
+    state.wave,
+    onShopBuy,
+    onShopSkip
+  );
+  showScreen('shop');
+}
+
+function onShopBuy(offer, target) {
+  if (state.gold < offer.cost) return;
+  state.gold -= offer.cost;
+  const msg = applyShopOffer(offer, target, state.allies.filter(m => m.alive));
+  advanceToNextWave(); // clears log, transitions to battle screen
+  logLine(msg, 'log-heal');
+  renderGold(state.gold);
+}
+
+function onShopSkip() {
+  advanceToNextWave();
 }
 
 // ── Button wiring ─────────────────────────────────────────────────────────────
@@ -351,3 +519,5 @@ function finishRecruit(chosen) {
 document.getElementById('btn-start').addEventListener('click', initGame);
 document.getElementById('btn-battle').addEventListener('click', runBattle);
 document.getElementById('btn-restart').addEventListener('click', initGame);
+document.getElementById('btn-open-revive').addEventListener('click', openReviveScreen);
+document.getElementById('btn-take-buff').addEventListener('click', applyAtkBuff);

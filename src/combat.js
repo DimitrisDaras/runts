@@ -140,7 +140,7 @@ function applyDefenseEffects(defender, damage, isBlocked, attackers, events) {
 function doSingleHit(attacker, target, critChance, isAoe, defenderAllies) {
   const events       = [];
   const sid          = skillOf(attacker);
-  const ignoreShield = sid === 'assassinate' || sid === 'shadow_kill';
+  const ignoreShield = sid === 'assassinate' || sid === 'shadow_kill' || sid === 'void_walk';
   const { damage, isCrit, isBlocked } = calcDamage(attacker, target, critChance);
 
   events.push({ type: isAoe ? 'aoe' : isCrit ? 'crit' : 'hit',
@@ -233,17 +233,46 @@ function doAttack(attacker, primaryTargets, aoeTargets, defenderAllies, critChan
 
   const target = primaryTargets[0];
 
-  // AOE family
-  const isNapalm = sid === 'napalm';
-  const isMeteor = sid === 'meteor';
-  const isAoe30  = sid === 'aoe_30' || sid === 'aoe';
-  const aoeBase  = isNapalm ? 0.55 : isMeteor ? 0.60 : isAoe30 ? 0.30 : 0;
+  // Storm Strike: hit 2 (or 3 at T2) random enemies
+  if (sid === 'storm_strike') {
+    const hitCount = attacker.skillTier === 2 ? 3 : 2;
+    const shuffled = [...aoeTargets].sort(() => Math.random() - 0.5).slice(0, hitCount);
+    for (const t of shuffled) {
+      if (t.alive) events.push(...doSingleHit(attacker, t, critChance, false, defenderAllies));
+    }
+    return events;
+  }
+
+  // Drake AOE: single melee hit + 30%/50% chance AOE secondary
+  if (sid === 'drake_aoe') {
+    events.push(...doSingleHit(attacker, target, critChance, false, defenderAllies));
+    const drakeChance = attacker.skillTier === 2 ? 0.50 : 0.30;
+    if (Math.random() < drakeChance) {
+      for (const t of aoeTargets) {
+        if (!t.alive) continue;
+        events.push(...doSingleHit(attacker, t, critChance, true, defenderAllies));
+      }
+    }
+    return events;
+  }
+
+  // AOE family (including inferno_aoe which always triggers)
+  const isNapalm  = sid === 'napalm';
+  const isMeteor  = sid === 'meteor';
+  const isAoe30   = sid === 'aoe_30' || sid === 'aoe';
+  const isInferno = sid === 'inferno_aoe';
+  const aoeBase   = isNapalm ? 0.55 : isMeteor ? 0.60 : isAoe30 ? 0.30 : isInferno ? 1.0 : 0;
   if (aoeBase > 0 && Math.random() < aoeBase + (syn?.aoeChance || 0)) {
     for (const t of aoeTargets) {
       if (!t.alive) continue;
       events.push(...doSingleHit(attacker, t, critChance, true, defenderAllies));
-      if (isNapalm && t.alive) applyBurn(t, 3, 2, events);
-      if (isMeteor && t.alive) applyBurn(t, 2, 2, events);
+      if (isNapalm   && t.alive) applyBurn(t, 3, 2, events);
+      if (isMeteor   && t.alive) applyBurn(t, 2, 2, events);
+      if (isInferno  && t.alive) {
+        const burnDmg  = attacker.skillTier === 2 ? 4 : 3;
+        const burnTurns = attacker.skillTier === 2 ? 3 : 2;
+        applyBurn(t, burnDmg, burnTurns, events);
+      }
     }
     return events;
   }
@@ -289,6 +318,20 @@ function doAttack(attacker, primaryTargets, aoeTargets, defenderAllies, critChan
 
   // Default single hit
   events.push(...doSingleHit(attacker, target, critChance, false, defenderAllies));
+
+  // Lifesteal: heal self for 50% (T1) or 75% (T2) of damage dealt
+  if (sid === 'lifesteal') {
+    const hitEv   = [...events].reverse().find(e => e.type === 'hit' || e.type === 'crit');
+    const healPct = attacker.skillTier === 2 ? 0.75 : 0.50;
+    if (hitEv && hitEv.damage > 0) {
+      const healAmt = Math.round(hitEv.damage * healPct);
+      if (healAmt > 0) {
+        attacker.hp = Math.min(attacker.maxHp, attacker.hp + healAmt);
+        events.push({ type: 'lifesteal_heal', minion: attacker, amount: healAmt });
+      }
+    }
+  }
+
   applyHitDebuffs(attacker, target, events);
   return events;
 }
@@ -335,6 +378,22 @@ function applyRegen(allies, syn) {
     if (sid === 'frenzy' && m.hp < m.maxHp * 0.5) {
       const h = Math.min(3, m.maxHp - m.hp); m.hp += h;
       if (h > 0) events.push({ type: 'regen', minion: m, amount: h });
+    }
+  }
+
+  // Ancient Druid: heals all allies 5/8 HP + regens 3/5 shield per turn
+  const druid = allies.find(m => m.alive && skillOf(m) === 'druid_heal');
+  if (druid) {
+    const healAmt   = druid.skillTier === 2 ? 8 : 5;
+    const shieldAmt = druid.skillTier === 2 ? 5 : 3;
+    for (const ally of allies) {
+      if (!ally.alive) continue;
+      const h = Math.min(healAmt, ally.maxHp - ally.hp);
+      if (h > 0) { ally.hp += h; events.push({ type: 'regen', minion: ally, amount: h }); }
+      if (ally.maxShield > 0) {
+        const s = Math.min(shieldAmt, ally.maxShield - ally.shield);
+        if (s > 0) { ally.shield += s; events.push({ type: 'shield_regen', minion: ally, amount: s }); }
+      }
     }
   }
 

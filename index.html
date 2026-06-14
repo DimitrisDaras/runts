@@ -30,10 +30,18 @@
     <div id="screen-battle" class="screen">
       <header class="hud">
         <span id="hud-wave">Wave 1</span>
+        <span id="hud-gold">🪙 20</span>
         <span id="hud-score">Score: 0</span>
       </header>
       <div id="hud-graveyard" class="graveyard-counter" hidden></div>
       <div id="boss-warning" class="boss-warning" hidden>⚠️ BOSS WAVE — Prepare!</div>
+      <div id="token-actions" class="token-actions" hidden>
+        <span id="token-count" class="token-count-text"></span>
+        <div class="token-btns">
+          <button id="btn-open-revive" class="btn-token">⚡ Revive</button>
+          <button id="btn-take-buff" class="btn-token">💪 +5% ATK</button>
+        </div>
+      </div>
 
       <div id="synergy-bar" class="synergy-bar" hidden></div>
 
@@ -60,12 +68,62 @@
       <button id="btn-skip" class="btn-secondary btn-skip">Skip →</button>
     </div>
 
+    <!-- ── BOSS RECRUIT SCREEN ── -->
+    <div id="screen-boss-recruit" class="screen">
+      <h2 class="boss-recruit-title">⚔️ Boss Cleared!</h2>
+      <p class="boss-recruit-sub">Choose your rewards</p>
+      <div class="boss-reward-section">
+        <p class="boss-slot-label">🔥 Boss Drop — automatically yours:</p>
+        <div id="boss-drop-card" class="recruit-cards boss-drop-cards"></div>
+      </div>
+      <div class="boss-reward-section">
+        <p class="boss-slot-label">⭐ Also pick one recruit:</p>
+        <div id="boss-normal-cards" class="recruit-cards"></div>
+      </div>
+      <button id="btn-boss-skip" class="btn-secondary btn-skip">Skip recruit →</button>
+    </div>
+
+    <!-- ── SHOP SCREEN ── -->
+    <div id="screen-shop" class="screen">
+      <div class="shop-header">
+        <h2 class="shop-title">🏪 Shop</h2>
+        <span id="shop-gold-display" class="shop-gold-display">🪙 20</span>
+      </div>
+      <p id="shop-sub" class="shop-sub">Wave complete — spend wisely</p>
+      <div id="shop-offers" class="shop-offers"></div>
+      <div id="shop-picker" class="shop-picker" hidden>
+        <p id="shop-picker-label" class="shop-picker-label"></p>
+        <div id="shop-picker-units" class="shop-picker-units"></div>
+        <button id="btn-shop-back" class="btn-secondary">← Back</button>
+      </div>
+      <button id="btn-shop-skip" class="btn-secondary btn-skip">Skip Shop →</button>
+    </div>
+
     <!-- ── MANAGE SQUAD SCREEN ── -->
     <div id="screen-manage" class="screen">
       <h2 class="manage-title">Manage Squad</h2>
       <p class="manage-sub">Remove one to make room</p>
       <div id="manage-minions" class="manage-minions"></div>
       <button id="btn-manage-cancel" class="btn-secondary">Cancel (Skip Recruit)</button>
+    </div>
+
+    <!-- ── REVIVE SCREEN ── -->
+    <div id="screen-revive" class="screen">
+      <h2 class="revive-title">⚡ Revive a Fallen Unit</h2>
+      <p class="revive-sub">Pick who returns at 40% HP · Costs 3 tokens</p>
+      <div id="revive-list" class="manage-minions"></div>
+      <button id="btn-revive-cancel" class="btn-secondary">Cancel</button>
+    </div>
+
+    <!-- ── REVIVE CONFIRM SCREEN ── -->
+    <div id="screen-revive-confirm" class="screen">
+      <h2 class="revive-title">Confirm Revive?</h2>
+      <div id="revive-confirm-info" class="revive-confirm-info"></div>
+      <p class="revive-sub">Returns at 40% HP, 0 shield. Costs 3 tokens.</p>
+      <div class="revive-confirm-btns">
+        <button id="btn-revive-yes" class="btn-primary">⚡ Revive</button>
+        <button id="btn-revive-no" class="btn-secondary">Cancel</button>
+      </div>
     </div>
 
     <!-- ── GAME OVER SCREEN ── -->
@@ -84,6 +142,7 @@
   <script src="src/minions.js"></script>
   <script src="src/synergies.js"></script>
   <script src="src/combat.js"></script>
+  <script src="src/shop.js"></script>
   <script src="src/ui.js"></script>
   <script src="src/main.js"></script>
 </body>
