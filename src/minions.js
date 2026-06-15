@@ -173,7 +173,7 @@ const ENEMY_POOL = [
   { name: 'Skeleton',  emoji: '💀', hp: 8,  atk: 7,  shield: 0,  trait: 'first', tribe: 'warrior', type: 'melee' },
   { name: 'Slime',     emoji: '🫧', hp: 20, atk: 4,  shield: 12, trait: 'regen', tribe: 'beast',   type: 'melee' },
   { name: 'Bat Swarm', emoji: '🦇', hp: 7,  atk: 9,  shield: 0,  trait: 'aoe',   tribe: 'beast',   type: 'range' },
-  { name: 'Troll',     emoji: '🧌', hp: 24, atk: 6,  shield: 18, trait: 'regen', tribe: 'support', type: 'melee' },
+  { name: 'Troll',     emoji: '🧌', hp: 16, atk: 6,  shield: 13, trait: 'regen', tribe: 'support', type: 'melee' },
   { name: 'Dark Mage', emoji: '🧙', hp: 11, atk: 10, shield: 3,  trait: 'crit',  tribe: 'mage',    type: 'range' },
 ];
 
@@ -226,9 +226,17 @@ function pickRandom(arr, n) {
  * @returns {Object}
  */
 function spawnMinion(tpl, side, wave, id) {
-  // +12% per wave (down from +20%); waves 1-2 get -20% buffer for new players
-  let scale = side === 'enemy' ? Math.pow(1.12, wave - 1) : 1;
-  if (side === 'enemy' && wave <= 2) scale *= 0.8;
+  // +12%/wave up to wave 7, then +8%/wave (softer slope for waves 8–14+)
+  let scale;
+  if (side !== 'enemy') {
+    scale = 1;
+  } else if (wave <= 2) {
+    scale = Math.pow(1.12, wave - 1) * 0.8;
+  } else if (wave <= 7) {
+    scale = Math.pow(1.12, wave - 1);
+  } else {
+    scale = Math.pow(1.12, 6) * Math.pow(1.08, wave - 7);
+  }
   const maxHp     = Math.round(tpl.hp * scale);
   const maxShield = Math.round((tpl.shield || 0) * scale);
   return {

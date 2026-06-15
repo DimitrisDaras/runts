@@ -4,7 +4,7 @@
 
 // ── Screen management ────────────────────────────────────────────────────────
 
-/** @param {'title'|'draft'|'battle'|'recruit'|'manage'|'gameover'} name */
+/** @param {string} name */
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
   document.getElementById(`screen-${name}`).classList.add('active');
@@ -18,8 +18,7 @@ function renderHud(wave, score) {
 }
 
 /**
- * Update the token HUD. Shows a small counter when tokens < 3,
- * or the full action panel (revive / buff) when tokens >= 3.
+ * Show small counter (tokens < 3) or full action panel (tokens >= 3).
  * @param {number} tokens
  */
 function renderTokenUI(tokens) {
@@ -54,6 +53,17 @@ function renderGold(gold) {
   if (el) el.textContent = `🪙 ${gold}`;
 }
 
+/** Render active relics row below the synergy bar. Hidden when no relics held. */
+function renderRelicBar(relics) {
+  const el = document.getElementById('relic-bar');
+  if (!el) return;
+  if (!relics?.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = relics.map(r =>
+    `<span class="relic-chip" title="${r.name}: ${r.desc}">${r.emoji}<span class="relic-name">${r.name}</span></span>`
+  ).join('');
+}
+
 // ── Minion cards ─────────────────────────────────────────────────────────────
 
 /** @param {Object} minion @returns {HTMLElement} */
@@ -62,6 +72,8 @@ function buildMinionCard(minion) {
   const rarityClass = minion.rarity ? ` rarity-${minion.rarity}` : '';
   card.className = `minion-card ${minion.side}${rarityClass}${minion.alive ? '' : ' dead'}`;
   card.id = `minion-${minion.id}`;
+
+  if (minion._justLeveled) card.classList.add('level-up-glow');
 
   const hpPct     = Math.max(0, (minion.hp / minion.maxHp) * 100);
   const shPct     = minion.maxShield > 0
@@ -111,7 +123,7 @@ function buildMinionCard(minion) {
 }
 
 /**
- * Re-render HP bar, shield bar, and dead state on an existing card.
+ * Re-render HP bar, shield bar, and dead state on an existing card without rebuilding it.
  * @param {Object} minion
  */
 function refreshMinionCard(minion) {
@@ -134,11 +146,19 @@ function refreshMinionCard(minion) {
 
 // ── Animations ───────────────────────────────────────────────────────────────
 
+function animateAttackStart(attacker) {
+  const card = document.getElementById(`minion-${attacker.id}`);
+  if (card) { card.classList.add('attacking'); setTimeout(() => card.classList.remove('attacking'), 350); }
+}
+
+function animateTargetHit(target) {
+  const card = document.getElementById(`minion-${target.id}`);
+  if (card) { card.classList.add('hit'); setTimeout(() => card.classList.remove('hit'), 400); }
+}
+
 function animateAttack(attacker, target) {
-  const aCard = document.getElementById(`minion-${attacker.id}`);
-  const tCard = document.getElementById(`minion-${target.id}`);
-  if (aCard) { aCard.classList.add('attacking'); setTimeout(() => aCard.classList.remove('attacking'), 350); }
-  if (tCard) { tCard.classList.add('hit');       setTimeout(() => tCard.classList.remove('hit'), 400); }
+  animateAttackStart(attacker);
+  animateTargetHit(target);
 }
 
 function animateEvolution(minion) {
@@ -148,6 +168,24 @@ function animateEvolution(minion) {
   newCard.classList.add('evolved');
   card.replaceWith(newCard);
   setTimeout(() => newCard.classList.remove('evolved'), 800);
+}
+
+// ── Damage number popups ──────────────────────────────────────────────────────
+
+/**
+ * Show a floating number above a unit's card.
+ * @param {Object} target   minion object
+ * @param {string} value    text to show  (e.g. "-12", "+5", "-3🛡")
+ * @param {string} cssClass 'hp' | 'shield' | 'heal' | 'crit' | 'burn' | 'block'
+ */
+function showDamagePopup(target, value, cssClass) {
+  const card = document.getElementById(`minion-${target.id}`);
+  if (!card) return;
+  const el = document.createElement('div');
+  el.className = `dmg-popup ${cssClass}`;
+  el.textContent = value;
+  card.appendChild(el);
+  setTimeout(() => el.remove(), 650);
 }
 
 // ── Battlefield (3×2 grid) ───────────────────────────────────────────────────
@@ -207,89 +245,178 @@ function clearLog() {
   document.getElementById('log-entries').innerHTML = '';
 }
 
-function renderCombatEvent(ev) {
+// ── Combat event renderer (async — handles its own animation timing) ──────────
+
+/**
+ * Render a single combat event with correct animation ordering.
+ * Sequence for attack events:
+ *   1. Attacker pop animation starts
+ *   2. sleep(150) — animation peaks
+ *   3. Target flash animation starts
+ *   4. sleep(120) — flash peaks
+ *   5. refreshMinionCard() + popup + log line
+ *   6. sleep(80) — brief pause
+ *
+ * Damage is already applied to unit objects by combat.js.
+ * We animate first, then reveal the stat change.
+ * @param {Object} ev
+ * @returns {Promise<void>}
+ */
+async function renderCombatEvent(ev) {
   switch (ev.type) {
+
     case 'hit':
-      animateAttack(ev.attacker, ev.target);
-      logLine(`${ev.attacker.emoji} ${ev.attacker.name} hits ${ev.target.emoji} ${ev.target.name} for ${ev.damage}${ev.isBlocked ? ' (blocked!)' : ''} dmg`,
-              ev.isBlocked ? 'log-block' : 'log-hit');
+      animateAttackStart(ev.attacker);
+      await sleep(150);
+      animateTargetHit(ev.target);
+      await sleep(120);
       refreshMinionCard(ev.target);
+      showDamagePopup(ev.target, `-${ev.damage}`, ev.isBlocked ? 'block' : 'hp');
+      logLine(
+        `${ev.attacker.emoji} ${ev.attacker.name} hits ${ev.target.emoji} ${ev.target.name} for ${ev.damage}${ev.isBlocked ? ' (blocked!)' : ''} dmg`,
+        ev.isBlocked ? 'log-block' : 'log-hit'
+      );
+      await sleep(80);
       break;
+
     case 'crit':
-      animateAttack(ev.attacker, ev.target);
+      animateAttackStart(ev.attacker);
+      await sleep(180);
+      animateTargetHit(ev.target);
+      await sleep(120);
+      refreshMinionCard(ev.target);
+      showDamagePopup(ev.target, `-${ev.damage}`, 'crit');
       logLine(`💥 CRIT! ${ev.attacker.emoji} ${ev.attacker.name} crushes ${ev.target.emoji} ${ev.target.name} for ${ev.damage} dmg!`, 'log-crit');
-      refreshMinionCard(ev.target);
+      await sleep(80);
       break;
+
     case 'aoe':
-      animateAttack(ev.attacker, ev.target);
+      animateAttackStart(ev.attacker);
+      await sleep(150);
+      animateTargetHit(ev.target);
+      await sleep(120);
+      refreshMinionCard(ev.target);
+      showDamagePopup(ev.target, `-${ev.damage}`, 'hp');
       logLine(`🌀 AOE! ${ev.attacker.emoji} ${ev.attacker.name} blasts ${ev.target.emoji} ${ev.target.name} for ${ev.damage} dmg`, 'log-aoe');
-      refreshMinionCard(ev.target);
+      await sleep(80);
       break;
+
     case 'splash':
-      logLine(`💢 Splash! ${ev.attacker.emoji} ${ev.attacker.name} splashes ${ev.target.emoji} ${ev.target.name} for ${ev.damage} dmg`, 'log-aoe');
+      animateTargetHit(ev.target);
+      await sleep(80);
       refreshMinionCard(ev.target);
+      showDamagePopup(ev.target, `-${ev.damage}`, 'hp');
+      logLine(`💢 Splash! ${ev.attacker.emoji} ${ev.attacker.name} splashes ${ev.target.emoji} ${ev.target.name} for ${ev.damage} dmg`, 'log-aoe');
+      await sleep(80);
       break;
+
     case 'death':
       logLine(`💀 ${ev.minion.emoji} ${ev.minion.name} is defeated!`, 'log-death');
       refreshMinionCard(ev.minion);
+      await sleep(80);
       break;
+
     case 'regen':
+      showDamagePopup(ev.minion, `+${ev.amount}`, 'heal');
       logLine(`💚 ${ev.minion.emoji} ${ev.minion.name} regens ${ev.amount} HP`, 'log-heal');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
     case 'bloom_heal':
+      showDamagePopup(ev.target, `+${ev.amount}`, 'heal');
       logLine(`🌸 ${ev.healer.emoji} ${ev.healer.name} blooms → heals ${ev.target.emoji} ${ev.target.name} ${ev.amount} HP`, 'log-heal');
       refreshMinionCard(ev.target);
+      await sleep(60);
       break;
+
     case 'burn_apply':
       logLine(`🔥 ${ev.target.emoji} ${ev.target.name} is burning! (${ev.dmg}/turn × ${ev.turns})`, 'log-crit');
+      await sleep(50);
       break;
+
     case 'burn_tick':
+      showDamagePopup(ev.minion, `-${ev.damage}`, 'burn');
       logLine(`🔥 ${ev.minion.emoji} ${ev.minion.name} takes ${ev.damage} burn dmg`, 'log-hit');
       refreshMinionCard(ev.minion);
+      await sleep(80);
       break;
+
     case 'shield_absorb':
+      showDamagePopup(ev.minion, `-${ev.amount}🛡`, 'shield');
       logLine(`🛡 ${ev.minion.emoji} ${ev.minion.name} absorbs ${ev.amount} into shield`, 'log-block');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
     case 'shield_break':
       logLine(`💔 Shield broken! ${ev.minion.emoji} ${ev.minion.name} is exposed!`, 'log-death');
       refreshMinionCard(ev.minion);
+      await sleep(80);
       break;
+
     case 'shield_regen':
+      showDamagePopup(ev.minion, `+${ev.amount}🛡`, 'shield');
       logLine(`🛡 ${ev.minion.emoji} ${ev.minion.name} regens ${ev.amount} shield (Druid)`, 'log-block');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
     case 'lifesteal_heal':
+      showDamagePopup(ev.minion, `+${ev.amount}`, 'heal');
       logLine(`🩸 ${ev.minion.emoji} ${ev.minion.name} drains ${ev.amount} HP`, 'log-heal');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
     case 'slow':
       logLine(`🧊 ${ev.target.emoji} ${ev.target.name} slowed! ATK −${Math.round(ev.amount * 100)}%`, 'log-block');
+      await sleep(50);
       break;
+
     case 'freeze':
       logLine(`❄️ ${ev.target.emoji} ${ev.target.name} is frozen! (skips next turn)`, 'log-block');
+      await sleep(50);
       break;
+
     case 'frozen_skip':
       animateAttack(ev.minion, ev.minion);
       logLine(`❄️ ${ev.minion.emoji} ${ev.minion.name} is frozen and skips their turn!`, 'log-block');
+      await sleep(100);
       break;
+
     case 'reflect':
-      logLine(`🛡️ Fortress! ${ev.source.emoji} ${ev.source.name} reflects ${ev.damage} dmg to ${ev.target.emoji} ${ev.target.name}`, 'log-block');
+      animateTargetHit(ev.target);
+      await sleep(80);
       refreshMinionCard(ev.target);
+      showDamagePopup(ev.target, `-${ev.damage}`, 'hp');
+      logLine(`🛡️ Fortress! ${ev.source.emoji} ${ev.source.name} reflects ${ev.damage} dmg to ${ev.target.emoji} ${ev.target.name}`, 'log-block');
+      await sleep(80);
       break;
+
     case 'hibernate':
+      showDamagePopup(ev.minion, `+${ev.amount}`, 'heal');
       logLine(`🐻 Hibernation! ${ev.minion.emoji} ${ev.minion.name} surges +${ev.amount} HP!`, 'log-heal');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
     case 'synregen':
+      showDamagePopup(ev.minion, `+${ev.amount}`, 'heal');
       logLine(`🐾 ${ev.minion.emoji} ${ev.minion.name} regens ${ev.amount} HP (Beast)`, 'log-heal');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
     case 'synheal':
+      showDamagePopup(ev.minion, `+${ev.amount}`, 'heal');
       logLine(`💚 ${ev.minion.emoji} ${ev.minion.name} healed ${ev.amount} HP (Support)`, 'log-heal');
       refreshMinionCard(ev.minion);
+      await sleep(60);
       break;
+
+    default:
+      await sleep(30);
   }
 }
 
@@ -336,12 +463,6 @@ function renderDraftScreen(options, pickedCount, pickedEmojis, onPick) {
 
 // ── Recruit screen ───────────────────────────────────────────────────────────
 
-/**
- * @param {Object[]} options
- * @param {Object[]} allies
- * @param {Function} onPick
- * @param {Function} onSkip
- */
 function renderRecruitScreen(options, allies, onPick, onSkip) {
   const container = document.getElementById('recruit-cards');
   container.innerHTML = '';
@@ -377,13 +498,6 @@ function renderRecruitScreen(options, allies, onPick, onSkip) {
 
 // ── Manage Squad screen ──────────────────────────────────────────────────────
 
-/**
- * @param {Object[]} filteredCurrent  pre-filtered list (same type as recruit, or all if total-limit)
- * @param {Object}   newRecruit       the chosen recruit
- * @param {string}   message          subtitle shown above the minion list
- * @param {Function} onRemove         callback(index into filteredCurrent)
- * @param {Function} onCancel
- */
 function renderManageSquadScreen(filteredCurrent, newRecruit, message, onRemove, onCancel) {
   const subEl = document.querySelector('#screen-manage .manage-sub');
   if (subEl) subEl.textContent = message;
@@ -410,7 +524,6 @@ function renderManageSquadScreen(filteredCurrent, newRecruit, message, onRemove,
     container.appendChild(card);
   });
 
-  // Incoming recruit preview
   const preview = document.createElement('div');
   preview.className = 'manage-recruit-preview';
   const tribeMeta = TRIBE_META[newRecruit.tribe] || { icon: '?', label: newRecruit.tribe };
@@ -433,15 +546,7 @@ function renderManageSquadScreen(filteredCurrent, newRecruit, message, onRemove,
 
 // ── Boss Recruit screen ───────────────────────────────────────────────────────
 
-/**
- * @param {Object}   bossDrop       the guaranteed boss-pool unit
- * @param {Object[]} normalOptions  3 normal-tier recruits to choose from
- * @param {Object[]} allies         current alive allies (for synergy hints)
- * @param {Function} onNormalPick   callback(index into normalOptions)
- * @param {Function} onSkip
- */
 function renderBossRecruitScreen(bossDrop, normalOptions, allies, onNormalPick, onSkip) {
-  // Boss drop preview (non-clickable — player gets it automatically)
   const dropContainer = document.getElementById('boss-drop-card');
   dropContainer.innerHTML = '';
   const bd         = bossDrop;
@@ -460,7 +565,6 @@ function renderBossRecruitScreen(bossDrop, normalOptions, allies, onNormalPick, 
   `;
   dropContainer.appendChild(dropCard);
 
-  // Normal options
   const normalContainer = document.getElementById('boss-normal-cards');
   normalContainer.innerHTML = '';
   normalOptions.forEach((m, i) => {
@@ -493,11 +597,6 @@ function renderBossRecruitScreen(bossDrop, normalOptions, allies, onNormalPick, 
 
 // ── Revive screens ────────────────────────────────────────────────────────────
 
-/**
- * @param {Object[]} revivable  filtered graveyard entries
- * @param {Function} onPick     callback(index)
- * @param {Function} onCancel
- */
 function renderReviveScreen(revivable, onPick, onCancel) {
   const container = document.getElementById('revive-list');
   container.innerHTML = '';
@@ -532,11 +631,6 @@ function renderReviveScreen(revivable, onPick, onCancel) {
   }
 }
 
-/**
- * @param {Object}   entry      graveyard record
- * @param {Function} onConfirm
- * @param {Function} onCancel
- */
 function renderReviveConfirm(entry, onConfirm, onCancel) {
   const info = document.getElementById('revive-confirm-info');
   info.innerHTML = `
@@ -554,15 +648,6 @@ function renderReviveConfirm(entry, onConfirm, onCancel) {
 
 // ── Shop screen ───────────────────────────────────────────────────────────────
 
-/**
- * Render the shop screen with 3 offers and an inline unit picker.
- * @param {Object[]} offers     from generateShopOffers()
- * @param {Object[]} allies     alive allies (for picker)
- * @param {number}   gold       current player gold
- * @param {number}   wave       completed wave number (for subtitle)
- * @param {Function} onBuy      callback(offer, targetUnit|null)
- * @param {Function} onSkip
- */
 function renderShopScreen(offers, allies, gold, wave, onBuy, onSkip) {
   const goldEl = document.getElementById('shop-gold-display');
   const subEl  = document.getElementById('shop-sub');
@@ -580,7 +665,7 @@ function renderShopScreen(offers, allies, gold, wave, onBuy, onSkip) {
     pickerEl.hidden = false;
     document.getElementById('shop-picker-label').textContent = `${offer.label} — pick a unit:`;
 
-    const unitsEl  = document.getElementById('shop-picker-units');
+    const unitsEl = document.getElementById('shop-picker-units');
     unitsEl.innerHTML = '';
 
     const targetable = offer.id === 'unlock_tier2'

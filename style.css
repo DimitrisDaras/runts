@@ -885,3 +885,65 @@ html, body {
 }
 .btn-shop-pick:hover  { background: #1a3a28; }
 .btn-shop-pick:active { transform: scale(0.95); }
+
+/* ── Relic bar ── */
+.relic-bar {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 0;
+  flex-shrink: 0;
+}
+.relic-chip {
+  background: #1a0d2a;
+  border: 1px solid #7c3aed44;
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 10px;
+  color: #c4b5fd;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: default;
+}
+.relic-chip:hover { border-color: #7c3aed88; }
+.relic-name { font-weight: 700; }
+
+/* ── position: relative on minion-card for popup positioning ── */
+.minion-card { position: relative; }
+
+/* ── Floating damage / heal number popups ── */
+.dmg-popup {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 900;
+  pointer-events: none;
+  animation: dmg-float 0.65s ease-out forwards;
+  z-index: 20;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+@keyframes dmg-float {
+  0%   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-26px); }
+}
+.dmg-popup.hp     { color: #f87171; text-shadow: 0 1px 4px #0009; }
+.dmg-popup.shield { color: #60a5fa; text-shadow: 0 1px 4px #0009; }
+.dmg-popup.heal   { color: #4ade80; text-shadow: 0 1px 4px #0009; }
+.dmg-popup.crit   { color: #fde68a; font-size: 14px; text-shadow: 0 0 8px #f59e0baa; }
+.dmg-popup.block  { color: #94a3b8; text-shadow: 0 1px 4px #0009; }
+.dmg-popup.burn   { color: #fb923c; text-shadow: 0 1px 4px #0009; }
+
+/* ── Level-up glow animation on minion card ── */
+@keyframes level-up-glow {
+  0%   { box-shadow: none; transform: scale(1); }
+  40%  { box-shadow: 0 0 18px #f59e0b, 0 0 36px #f59e0b55; transform: scale(1.06); }
+  100% { box-shadow: 0 0 5px #f59e0b33; transform: scale(1); }
+}
+.minion-card.level-up-glow {
+  animation: level-up-glow 0.9s ease forwards;
+}

@@ -35,6 +35,8 @@ function effectiveAtk(m) {
   return Math.max(1, atk);
 }
 
+function isDead(unit) { return unit.hp <= 0; }
+
 // ── Damage resolution ────────────────────────────────────────────────────────
 
 /**
@@ -87,10 +89,11 @@ function applyDamage(target, rawDmg, ignoreShield) {
 
 // ── Burn ─────────────────────────────────────────────────────────────────────
 
-function applyBurn(target, dmg, turns, events) {
-  target.statuses.burn      = Math.max(target.statuses.burn || 0, dmg);
+function applyBurn(target, dmg, turns, events, syn) {
+  const totalDmg = dmg + (syn?.burnBonus || 0);
+  target.statuses.burn      = Math.max(target.statuses.burn || 0, totalDmg);
   target.statuses.burnTurns = Math.max(target.statuses.burnTurns || 0, turns);
-  events.push({ type: 'burn_apply', target, dmg, turns });
+  events.push({ type: 'burn_apply', target, dmg: totalDmg, turns });
 }
 
 // ── Debuffs ──────────────────────────────────────────────────────────────────
@@ -223,6 +226,7 @@ function doAttack(attacker, primaryTargets, aoeTargets, defenderAllies, critChan
   const events = [];
   const sid    = skillOf(attacker);
 
+  if (!attacker.alive) return events;
   if (!primaryTargets.length) return events;
 
   if (attacker.statuses.frozen) {
@@ -266,12 +270,12 @@ function doAttack(attacker, primaryTargets, aoeTargets, defenderAllies, critChan
     for (const t of aoeTargets) {
       if (!t.alive) continue;
       events.push(...doSingleHit(attacker, t, critChance, true, defenderAllies));
-      if (isNapalm   && t.alive) applyBurn(t, 3, 2, events);
-      if (isMeteor   && t.alive) applyBurn(t, 2, 2, events);
+      if (isNapalm   && t.alive) applyBurn(t, 3, 2, events, syn);
+      if (isMeteor   && t.alive) applyBurn(t, 2, 2, events, syn);
       if (isInferno  && t.alive) {
         const burnDmg  = attacker.skillTier === 2 ? 4 : 3;
         const burnTurns = attacker.skillTier === 2 ? 3 : 2;
-        applyBurn(t, burnDmg, burnTurns, events);
+        applyBurn(t, burnDmg, burnTurns, events, syn);
       }
     }
     return events;
@@ -423,6 +427,15 @@ function applyRegen(allies, syn) {
     }
   }
 
+  // Nature's Blessing relic: regen 2 HP for all allies each turn
+  if (syn?.relicRegen) {
+    for (const m of allies) {
+      if (!m.alive) continue;
+      const h = Math.min(syn.relicRegen, m.maxHp - m.hp);
+      if (h > 0) { m.hp += h; events.push({ type: 'regen', minion: m, amount: h }); }
+    }
+  }
+
   return events;
 }
 
@@ -456,14 +469,24 @@ function resolveTurn(allies, enemies, syn) {
   if (getBattleResult(allies, enemies)) return events;
 
   for (const a of sortByFirst(aliveAllies())) {
+    if (!a.alive) continue;
     const alive = aliveEnemies();
     if (!alive.length) break;
     events.push(...doAttack(a, getTargetPool(a, alive, true), getAoeTargets(a, alive, true), aliveAllies(), critChance, syn));
     if (!aliveEnemies().length) break;
+    // War Banner relic: each ally attacks twice on the first turn
+    if (syn?.warBanner) {
+      const alive2 = aliveEnemies();
+      if (alive2.length) {
+        events.push(...doAttack(a, getTargetPool(a, alive2, true), getAoeTargets(a, alive2, true), aliveAllies(), critChance, syn));
+        if (!aliveEnemies().length) break;
+      }
+    }
   }
   if (getBattleResult(allies, enemies)) return events;
 
   for (const e of sortByFirst(aliveEnemies())) {
+    if (!e.alive) continue;
     const alive = aliveAllies();
     if (!alive.length) break;
     events.push(...doAttack(e, getTargetPool(e, alive, false), getAoeTargets(e, alive, false), aliveEnemies(), 0.20, null));

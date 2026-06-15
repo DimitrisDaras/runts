@@ -35,7 +35,7 @@ const SHOP_POOL = [
   {
     id: 'relic',
     label: '📦 Relic',
-    desc:  'Get a random relic (coming soon)',
+    desc:  'Get a random relic from the relic pool (no duplicates)',
     cost:  25,
     needsTarget: false,
   },
@@ -52,8 +52,12 @@ const SHOP_POOL = [
  * Pick 3 random offers from SHOP_POOL.
  * @returns {Object[]}
  */
-function generateShopOffers() {
-  return pickRandom(SHOP_POOL, 3);
+/**
+ * @param {number} count  number of offers to pick (default 3; Lucky Charm gives 4)
+ * @returns {Object[]}
+ */
+function generateShopOffers(count = 3) {
+  return pickRandom(SHOP_POOL, count);
 }
 
 /**
